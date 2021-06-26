@@ -6,6 +6,8 @@
 #include <string>
 #include <unordered_map>
 
+#include <FoxoCommons/OpenGL/Buffer.h>
+
 #include <glm/glm.hpp>
 #include <glad/gl.h>
 
@@ -57,12 +59,11 @@ namespace FoxoCraft
 		World* m_World = nullptr;
 		std::array<Block*, s_ChunkSize3> m_Data;
 		GLint m_Count = 0;
-		GLuint m_Vao = 0;
-		GLuint m_Vbo = 0;
+		FoxoCommons::VertexArray m_Vao = 0;
+		FoxoCommons::BufferObject m_Vbo = 0;
 		bool m_Dirty = true;
 
 		Chunk(glm::ivec3 pos, World* world);
-		~Chunk();
 
 		inline size_t IndexLS(glm::ivec3 ls)
 		{

@@ -2,7 +2,8 @@
 
 #include <unordered_map>
 
-#include <FoxoCommons/debug-trap.h>
+#include <FoxoCommons/DebugTrap.h>
+#include <FoxoCommons/Util.h>
 
 #include "Log.h"
 #include <FoxoCommons/FrustumCull.h>
@@ -161,12 +162,6 @@ namespace FoxoCraft
 		m_Data.fill(nullptr);
 	}
 
-	Chunk::~Chunk()
-	{
-		if (m_Vao != 0) glDeleteVertexArrays(1, &m_Vao);
-		if (m_Vbo != 0) glDeleteBuffers(1, &m_Vbo);
-	}
-
 	bool Chunk::InBoundsLS(glm::ivec3 ls)
 	{
 		if (ls.x < 0) return false;
@@ -286,6 +281,7 @@ namespace FoxoCraft
 		};
 
 		std::vector<float> data;
+		data.reserve(Faces::s_Count * 3 * s_ChunkSize);
 		m_Count = 0;
 
 		glm::ivec3 ws;
@@ -327,46 +323,37 @@ namespace FoxoCraft
 			}
 		}
 
-		if (m_Vao != 0)
-		{
-			glDeleteVertexArrays(1, &m_Vao);
-			m_Vao = 0;
-		}
-
-		if (m_Vbo != 0)
-		{
-			glDeleteBuffers(1, &m_Vbo);
-			m_Vbo = 0;
-		}
+		m_Vao = 0;
+		m_Vbo = 0;
 
 		// no data was in the chunk, dont create gpu information
 		if (data.size() != 0)
 		{
-			glCreateBuffers(1, &m_Vbo);
-			glNamedBufferStorage(m_Vbo, data.size() * sizeof(float), data.data(), GL_NONE);
+			m_Vbo = FoxoCommons::BufferObject();
+			m_Vbo.Storage(data.size() * sizeof(float), data.data(), GL_NONE);
 
-			glCreateVertexArrays(1, &m_Vao);
-			glVertexArrayVertexBuffer(m_Vao, 0, m_Vbo, 0, 9 * sizeof(float));
-			glEnableVertexArrayAttrib(m_Vao, 0);
-			glEnableVertexArrayAttrib(m_Vao, 1);
-			glEnableVertexArrayAttrib(m_Vao, 2);
-			glVertexArrayAttribFormat(m_Vao, 0, 3, GL_FLOAT, GL_FALSE, 0 * sizeof(float));
-			glVertexArrayAttribFormat(m_Vao, 1, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float));
-			glVertexArrayAttribFormat(m_Vao, 2, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float));
-			glVertexArrayAttribBinding(m_Vao, 0, 0);
-			glVertexArrayAttribBinding(m_Vao, 1, 0);
-			glVertexArrayAttribBinding(m_Vao, 2, 0);
+			m_Vao = FoxoCommons::VertexArray();
+			m_Vao.VertexBuffer(0, m_Vbo, 0, 9 * sizeof(float));
+			m_Vao.EnableAttrib(0);
+			m_Vao.EnableAttrib(1);
+			m_Vao.EnableAttrib(2);
+			m_Vao.AttribFormat(0, 3, GL_FLOAT, false, 0 * sizeof(float));
+			m_Vao.AttribFormat(1, 3, GL_FLOAT, false, 3 * sizeof(float));
+			m_Vao.AttribFormat(2, 3, GL_FLOAT, false, 6 * sizeof(float));
+			m_Vao.AttribBinding(0, 0);
+			m_Vao.AttribBinding(1, 0);
+			m_Vao.AttribBinding(2, 0);
 		}
 	}
 
 	bool Chunk::IsAvailable()
 	{
-		return m_Vao != 0 && m_Vbo != 0;
+		return m_Vao.GetHandle() != 0 && m_Vbo.GetHandle() != 0;
 	}
 
 	void Chunk::Render()
 	{
-		glBindVertexArray(m_Vao);
+		m_Vao.Bind();
 		glDrawArrays(GL_TRIANGLES, 0, m_Count);
 	}
 
@@ -409,9 +396,13 @@ namespace FoxoCraft
 	Block* World::GetBlockWS(glm::ivec3 ws)
 	{
 		glm::ivec3 cs;
-		cs.x = static_cast<int>(glm::floor(static_cast<float>(ws.x) / static_cast<float>(s_ChunkSize)));
-		cs.y = static_cast<int>(glm::floor(static_cast<float>(ws.y) / static_cast<float>(s_ChunkSize)));
-		cs.z = static_cast<int>(glm::floor(static_cast<float>(ws.z) / static_cast<float>(s_ChunkSize)));
+		cs.x = FoxoCommons::FastFloor(static_cast<float>(ws.x) / static_cast<float>(s_ChunkSize));
+		cs.y = FoxoCommons::FastFloor(static_cast<float>(ws.y) / static_cast<float>(s_ChunkSize));
+		cs.z = FoxoCommons::FastFloor(static_cast<float>(ws.z) / static_cast<float>(s_ChunkSize));
+
+		//cs.x = static_cast<int>(glm::floor(static_cast<float>(ws.x) / static_cast<float>(s_ChunkSize)));
+		//cs.y = static_cast<int>(glm::floor(static_cast<float>(ws.y) / static_cast<float>(s_ChunkSize)));
+		//cs.z = static_cast<int>(glm::floor(static_cast<float>(ws.z) / static_cast<float>(s_ChunkSize)));
 
 		auto result = m_Chunks.find(cs);
 

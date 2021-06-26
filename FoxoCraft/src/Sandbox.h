@@ -5,8 +5,8 @@
 #include <backends/imgui_impl_opengl3.h>
 #include <FoxoCommons/Window.h>
 #include <FoxoCommons/Transform.h>
-#include <FoxoCommons/Shader.h>
-#include <FoxoCommons/Texture.h>
+#include <FoxoCommons/OpenGL/Shader.h>
+#include <FoxoCommons/OpenGL/Texture.h>
 #include <FoxoCommons/State.h>
 #include <FoxoCommons/Application.h>
 
@@ -72,7 +72,7 @@ namespace FoxoCraft
 
 		FoxoCommons::StateManager m_StateManger;
 
-		FoxoCommons::Program m_Program;
+		FoxoCommons::Program m_Program = 0;
 		FoxoCommons::Texture2DArray m_Texture;
 	};
 }
