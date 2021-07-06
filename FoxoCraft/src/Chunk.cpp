@@ -10,6 +10,14 @@
 
 #include <GLFW/glfw3.h>
 
+#include <iostream>
+#include <atomic>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+
+#include "EasyConditionVariable.h"
+
 namespace FoxoCraft
 {
 	namespace Faces
@@ -180,6 +188,7 @@ namespace FoxoCraft
 		return ws;
 	}
 
+	// US = unsafe
 	Block* Chunk::GetBlockLSUS(glm::ivec3 ls)
 	{
 		return m_Data[IndexLS(ls)];
@@ -207,7 +216,6 @@ namespace FoxoCraft
 		if (GetBlockLSUS(ls) == block) return;
 
 		m_Data[IndexLS(ls)] = block;
-		m_Dirty = true;
 	}
 
 	void Chunk::Generate()
@@ -222,7 +230,7 @@ namespace FoxoCraft
 
 		OpenSimplexNoise& noise = m_World->m_Generator.m_Generator;
 
-		Block* grass = GetBlock("core.grass");
+		Block* grass = GetBlock("core.grass_block");
 		Block* dirt = GetBlock("core.dirt");
 		Block* stone = GetBlock("core.stone");
 
@@ -267,6 +275,34 @@ namespace FoxoCraft
 		}
 	}
 
+	void Chunk::UploadMesh()
+	{
+		m_Vao = 0;
+		m_Vbo = 0;
+
+		// no data was in the chunk, dont create gpu information
+		if (data.size() != 0)
+		{
+			m_Vbo = FoxoCommons::BufferObject();
+			m_Vbo.Storage(data.size() * sizeof(float), data.data(), GL_NONE);
+
+			m_Vao = FoxoCommons::VertexArray();
+			m_Vao.VertexBuffer(0, m_Vbo, 0, 9 * sizeof(float));
+			m_Vao.EnableAttrib(0);
+			m_Vao.EnableAttrib(1);
+			m_Vao.EnableAttrib(2);
+			m_Vao.AttribFormat(0, 3, GL_FLOAT, false, 0 * sizeof(float));
+			m_Vao.AttribFormat(1, 3, GL_FLOAT, false, 3 * sizeof(float));
+			m_Vao.AttribFormat(2, 3, GL_FLOAT, false, 6 * sizeof(float));
+			m_Vao.AttribBinding(0, 0);
+			m_Vao.AttribBinding(1, 0);
+			m_Vao.AttribBinding(2, 0);
+		}
+
+		data.clear();
+		data.shrink_to_fit();
+	}
+
 	void Chunk::BuildMeshV2()
 	{
 		// W is the side, 0 is top, 1 is side, 2 is bottom
@@ -280,8 +316,8 @@ namespace FoxoCraft
 			glm::ivec4(0, 0, 1, 1)
 		};
 
-		std::vector<float> data;
-		data.reserve(Faces::s_Count * 3 * s_ChunkSize);
+		data.clear();
+		// data.reserve(Faces::s_Count * 3 * s_ChunkSize);
 		m_Count = 0;
 
 		glm::ivec3 ws;
@@ -323,27 +359,7 @@ namespace FoxoCraft
 			}
 		}
 
-		m_Vao = 0;
-		m_Vbo = 0;
-
-		// no data was in the chunk, dont create gpu information
-		if (data.size() != 0)
-		{
-			m_Vbo = FoxoCommons::BufferObject();
-			m_Vbo.Storage(data.size() * sizeof(float), data.data(), GL_NONE);
-
-			m_Vao = FoxoCommons::VertexArray();
-			m_Vao.VertexBuffer(0, m_Vbo, 0, 9 * sizeof(float));
-			m_Vao.EnableAttrib(0);
-			m_Vao.EnableAttrib(1);
-			m_Vao.EnableAttrib(2);
-			m_Vao.AttribFormat(0, 3, GL_FLOAT, false, 0 * sizeof(float));
-			m_Vao.AttribFormat(1, 3, GL_FLOAT, false, 3 * sizeof(float));
-			m_Vao.AttribFormat(2, 3, GL_FLOAT, false, 6 * sizeof(float));
-			m_Vao.AttribBinding(0, 0);
-			m_Vao.AttribBinding(1, 0);
-			m_Vao.AttribBinding(2, 0);
-		}
+		
 	}
 
 	bool Chunk::IsAvailable()
@@ -357,20 +373,156 @@ namespace FoxoCraft
 		glDrawArrays(GL_TRIANGLES, 0, m_Count);
 	}
 
+	WorldGenerator::WorldGenerator()
+		: m_Seed(0)
+	{
+		m_Generator = OpenSimplexNoise(0);
+	}
+
 	WorldGenerator::WorldGenerator(int64_t seed)
 		: m_Seed(seed)
 	{
 		m_Generator = OpenSimplexNoise(seed);
 	}
 
+	class ThreadQueue
+	{
+	public:
+		void Push(std::shared_ptr<Chunk> chunk)
+		{
+			std::lock_guard<std::mutex> lck(m_Mutex);
+			m_Queue.push_back(chunk);
+
+			m_Cv.notify_one();
+		}
+
+		[[nodiscard]] std::shared_ptr<Chunk> Pop()
+		{
+			std::lock_guard<std::mutex> lck(m_Mutex);
+
+			if (m_Queue.empty()) return nullptr;
+
+			std::shared_ptr<Chunk> back = m_Queue.back();
+			m_Queue.pop_back();
+
+			if (m_Queue.empty()) m_Queue.shrink_to_fit();
+
+			return back;
+		}
+
+		bool IsEmpty()
+		{
+			std::lock_guard<std::mutex> lck(m_Mutex);
+			return m_Queue.empty();
+		}
+
+		void WaitForData()
+		{
+			std::unique_lock<std::mutex> lck(m_Mutex);
+			
+			if (!m_Queue.empty() && m_Rdy) return;
+
+			while(m_Queue.empty() && m_Rdy) m_Cv.wait(lck);
+		}
+
+		void NotifyAll()
+		{
+			m_Rdy = false;
+			m_Cv.notify_all();
+			
+		}
+	private:
+		std::vector<std::shared_ptr<Chunk>> m_Queue;
+		std::mutex m_Mutex = std::mutex();
+		std::condition_variable m_Cv;
+		std::atomic_bool m_Rdy = true;
+	};
+
+	static ThreadQueue s_MeshQueue;
+	static ThreadQueue s_UploadQueue;
+
+	// Meshing Threading
+	std::atomic<bool> m_RunMeshing = false;
+	std::vector<std::thread> m_MeshingThreads;
+	
+
 	World::World(int64_t seed)
 		: m_Generator(seed)
 	{
 	}
 
-	void World::AddChunks()
+	void World::StartMeshing()
 	{
-		int radius = 3;
+		if (m_RunMeshing) return;
+
+		m_RunMeshing = true;
+
+		unsigned int processorCount = std::thread::hardware_concurrency();
+		if (processorCount == 0) processorCount = 4;
+
+		std::cout << "Using " << processorCount << " generator threads\n";
+
+		m_MeshingThreads.reserve(processorCount);
+
+		for (size_t i = 0; i < processorCount; ++i)
+		{
+			m_MeshingThreads.push_back(std::thread([]()
+			{
+				while (m_RunMeshing)
+				{
+					s_MeshQueue.WaitForData();
+
+					if (!s_MeshQueue.IsEmpty())
+					{
+						// Exception thrown at 0x00007FF65CBB91EE in FoxoCraft.exe: 0xC0000005: Access violation reading location 0xFFFFFFFFFFFFFFF8.
+						std::shared_ptr<Chunk> chunk = s_MeshQueue.Pop();
+
+						if (chunk)
+						{
+							chunk->BuildMeshV2();
+							s_UploadQueue.Push(chunk);
+						}
+
+						
+					}
+				}
+			}));
+		}
+	}
+
+	void World::EndMeshing()
+	{
+		if (!m_RunMeshing) return;
+
+		m_RunMeshing = false;
+
+		s_MeshQueue.NotifyAll();
+
+		for (auto& thread : m_MeshingThreads)
+		{
+			thread.join();
+		}
+
+		m_MeshingThreads.clear();
+	}
+
+	std::shared_ptr<Chunk> World::GetChunk(glm::ivec3 cs)
+	{
+
+		auto result = m_Chunks.find(cs);
+
+		if (result == m_Chunks.end()) return nullptr;
+
+		return result->second;
+	}
+
+	void World::AddChunksCS(const glm::ivec3& rel)
+	{
+		// Setup initial spawn area
+		//int radius = 8;
+		int radius = 8;
+
+		std::vector<std::shared_ptr<Chunk>> chunks;
 
 		glm::ivec3 cs;
 
@@ -380,14 +532,40 @@ namespace FoxoCraft
 			{
 				for (cs.x = -radius; cs.x <= radius; ++cs.x)
 				{
-					std::shared_ptr<Chunk> chunk = std::make_shared<Chunk>(cs, this);
-					chunk->Generate();
-					m_Chunks[cs] = chunk;
+					glm::ivec3 ccs = cs + rel;
+
+					// Continue if this chunk never been generated
+					if (!GetChunk(ccs))
+					{
+						// TODO: queue neighbor chunks to be remeshed
+						std::shared_ptr<Chunk> chunk = std::make_shared<Chunk>(ccs, this);
+						chunks.push_back(chunk);
+						chunk->Generate();
+						m_Chunks[ccs] = chunk;
+					}
 				}
 			}
 		}
+
+		// Set the new chunks to generate
+
+		for (auto& chunk : chunks)
+		{
+			s_MeshQueue.Push(chunk);
+		}
 	}
 
+	void World::AddChunksWS(const glm::vec3& ws)
+	{
+		glm::ivec3 cs;
+		cs.x = FoxoCommons::FastFloor(ws.x / s_ChunkSizeF);
+		cs.y = FoxoCommons::FastFloor(ws.y / s_ChunkSizeF);
+		cs.z = FoxoCommons::FastFloor(ws.z / s_ChunkSizeF);
+
+		AddChunksCS(cs);
+	}
+
+	
 	Block* World::GetBlockWS(glm::vec3 ws)
 	{
 		return GetBlockWS(glm::ivec3(glm::floor(ws)));
@@ -396,39 +574,46 @@ namespace FoxoCraft
 	Block* World::GetBlockWS(glm::ivec3 ws)
 	{
 		glm::ivec3 cs;
-		cs.x = FoxoCommons::FastFloor(static_cast<float>(ws.x) / static_cast<float>(s_ChunkSize));
-		cs.y = FoxoCommons::FastFloor(static_cast<float>(ws.y) / static_cast<float>(s_ChunkSize));
-		cs.z = FoxoCommons::FastFloor(static_cast<float>(ws.z) / static_cast<float>(s_ChunkSize));
+		cs.x = FoxoCommons::FastFloor(ws.x / s_ChunkSizeF);
+		cs.y = FoxoCommons::FastFloor(ws.y / s_ChunkSizeF);
+		cs.z = FoxoCommons::FastFloor(ws.z / s_ChunkSizeF);
 
-		//cs.x = static_cast<int>(glm::floor(static_cast<float>(ws.x) / static_cast<float>(s_ChunkSize)));
-		//cs.y = static_cast<int>(glm::floor(static_cast<float>(ws.y) / static_cast<float>(s_ChunkSize)));
-		//cs.z = static_cast<int>(glm::floor(static_cast<float>(ws.z) / static_cast<float>(s_ChunkSize)));
+		std::shared_ptr<Chunk> chunk = GetChunk(cs);
 
-		auto result = m_Chunks.find(cs);
-
-		if (result == m_Chunks.end())
-			return nullptr;
+		if (!chunk) return nullptr;
 
 		glm::ivec3 ls = ws - cs * static_cast<int>(s_ChunkSize);
 
-		return result->second->GetBlockLS(ls);
+		return chunk->GetBlockLS(ls);
 	}
 
 	void World::Render(const glm::mat4& projView, DebugData& data)
 	{
-		for (auto& [k, v] : m_Chunks)
 		{
-			if (v->m_Dirty)
+			// The maximum amount of uploads per frame
+			size_t maxCount = 0;
+
+			while (!s_UploadQueue.IsEmpty())
 			{
-				v->BuildMeshV2();
-				v->m_Dirty = false;
-				break;
+				std::shared_ptr<Chunk> chunk = s_UploadQueue.Pop();
+				
+				chunk->UploadMesh();
+
+				++maxCount;
+				if (maxCount >= 1024) break;
 			}
+
+			if(maxCount) std::cout << "Uploaded " << maxCount << '\n';
 		}
 
-		/////////////////////////////////
+		// Check if we moved between chunks
+
+		
+
+		// Render chunks
 
 		Frustum f(projView);
+
 
 		data.chunksTotal = m_Chunks.size();
 		data.chunksRendered = 0;

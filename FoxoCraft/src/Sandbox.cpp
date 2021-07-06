@@ -192,17 +192,37 @@ namespace FoxoCraft
 			int64_t seed = FoxoCommons::GenerateValue(std::numeric_limits<int64_t>::lowest(), std::numeric_limits<int64_t>::max());
 			FC_LOG_INFO("Using seed: {}", seed);
 			m_World = FoxoCraft::World(seed);
-			m_World.AddChunks();
+
+			m_World.StartMeshing();
+
+			
+
+			
 		}
 
 		virtual void Update() override
 		{
+			static glm::ivec3 lastChunkCoord = { -1000, -1000, -1000 };
+
 			Sandbox* game = GetStateManager()->GetUserPtr<Sandbox>();
 
 			s_DebugData.playerPos = m_Player.m_Transform.m_Pos;
 			s_DebugData.Draw();
 
 			m_Player.Update(game->m_Window.GetHandle(), game->GetDeltaTime(), game->m_MouseDelta, m_World);
+
+			glm::ivec3 chunkCoord;
+			chunkCoord.x = FoxoCommons::FastFloor(m_Player.m_Transform.m_Pos.x / s_ChunkSizeF);
+			chunkCoord.y = FoxoCommons::FastFloor(m_Player.m_Transform.m_Pos.y / s_ChunkSizeF);
+			chunkCoord.z = FoxoCommons::FastFloor(m_Player.m_Transform.m_Pos.z / s_ChunkSizeF);
+
+			if (chunkCoord != lastChunkCoord)
+			{
+				// Only do this between chunks
+				m_World.AddChunksCS(chunkCoord);
+			}
+
+			lastChunkCoord = chunkCoord;
 
 			auto [w, h] = game->m_Window.GetSize();
 			m_Camera.m_Aspect = game->m_Window.GetAspect();
@@ -234,6 +254,7 @@ namespace FoxoCraft
 
 		virtual void Destroy() override
 		{
+			m_World.EndMeshing();
 		}
 	private:
 		Camera m_Camera;
@@ -313,10 +334,11 @@ namespace FoxoCraft
 
 		ModLoader::Load(m_Texture);
 
-		FoxoCraft::RegisterBlock("core.grass", FoxoCraft::Block(FoxoCraft::GetBlockFace("core.grass"), FoxoCraft::GetBlockFace("core.grass_side"), FoxoCraft::GetBlockFace("core.dirt")));
+		FoxoCraft::RegisterBlock("core.grass_block", FoxoCraft::Block(FoxoCraft::GetBlockFace("core.grass_block_top"), FoxoCraft::GetBlockFace("core.grass_block_side"), FoxoCraft::GetBlockFace("core.dirt")));
 		FoxoCraft::RegisterBlock("core.dirt", FoxoCraft::Block(FoxoCraft::GetBlockFace("core.dirt"), FoxoCraft::GetBlockFace("core.dirt"), FoxoCraft::GetBlockFace("core.dirt")));
-		FoxoCraft::RegisterBlock("core.wood", FoxoCraft::Block(FoxoCraft::GetBlockFace("core.wood"), FoxoCraft::GetBlockFace("core.wood"), FoxoCraft::GetBlockFace("core.wood")));
+		FoxoCraft::RegisterBlock("core.oak_planks", FoxoCraft::Block(FoxoCraft::GetBlockFace("core.oak_planks"), FoxoCraft::GetBlockFace("core.oak_planks"), FoxoCraft::GetBlockFace("core.oak_planks")));
 		FoxoCraft::RegisterBlock("core.stone", FoxoCraft::Block(FoxoCraft::GetBlockFace("core.stone"), FoxoCraft::GetBlockFace("core.stone"), FoxoCraft::GetBlockFace("core.stone")));
+		FoxoCraft::RegisterBlock("core.oak_log", FoxoCraft::Block(FoxoCraft::GetBlockFace("core.oak_log_top"), FoxoCraft::GetBlockFace("core.oak_log_side"), FoxoCraft::GetBlockFace("core.oak_log_top")));
 		FoxoCraft::LockModify(); // prevent further changes to structures
 
 		std::optional<std::string> vertSrc = FoxoCommons::ReadTextFile("res/chunk.vert");

@@ -4,7 +4,9 @@
 #include <vector>
 #include <memory>
 #include <string>
+#include <deque>
 #include <unordered_map>
+#include <mutex>
 
 #include <FoxoCommons/OpenGL/Buffer.h>
 
@@ -16,7 +18,30 @@
 
 namespace FoxoCraft
 {
-	inline constexpr size_t s_ChunkSize = 32;
+	struct IVec3
+	{
+		int x, y, z;
+
+		IVec3() = default;
+		inline IVec3(float xx, float yy, float zz)
+			: x(xx), y(yy), z(zz)
+		{
+		}
+		inline IVec3(glm::ivec3 val)
+			: x(val.x), y(val.y), z(val.z)
+		{
+		}
+
+		
+	};
+
+	inline bool operator==(IVec3 lhs, IVec3 rhs)
+	{
+		return lhs.x == rhs.x && lhs.y == rhs.y && lhs.z == rhs.z;
+	}
+
+	inline constexpr size_t s_ChunkSize = 16;
+	inline constexpr float s_ChunkSizeF = static_cast<float>(s_ChunkSize);
 	inline constexpr size_t s_ChunkSize2 = s_ChunkSize * s_ChunkSize;
 	inline constexpr size_t s_ChunkSize3 = s_ChunkSize * s_ChunkSize * s_ChunkSize;
 
@@ -61,7 +86,7 @@ namespace FoxoCraft
 		GLint m_Count = 0;
 		FoxoCommons::VertexArray m_Vao = 0;
 		FoxoCommons::BufferObject m_Vbo = 0;
-		bool m_Dirty = true;
+		std::vector<float> data;
 
 		Chunk(glm::ivec3 pos, World* world);
 
@@ -84,6 +109,8 @@ namespace FoxoCraft
 
 		void Generate();
 
+		void UploadMesh();
+
 		void BuildMeshV2();
 
 		bool IsAvailable();
@@ -93,7 +120,7 @@ namespace FoxoCraft
 
 	struct KeyHash
 	{
-		size_t operator()(const glm::ivec3& k) const
+		size_t operator()(const IVec3& k) const
 		{
 			return std::hash<int>()(k.x) ^ std::hash<int>()(k.y) ^ std::hash<int>()(k.z);
 		}
@@ -104,6 +131,7 @@ namespace FoxoCraft
 		int64_t m_Seed;
 		OpenSimplexNoise m_Generator;
 
+		WorldGenerator();
 		WorldGenerator(int64_t seed);
 	};
 
@@ -113,13 +141,20 @@ namespace FoxoCraft
 
 		World(int64_t seed);
 
-		std::unordered_map<glm::ivec3, std::shared_ptr<Chunk>, KeyHash> m_Chunks;
+		void StartMeshing();
+		void EndMeshing();
 
-		void AddChunks();
+		
 
+		void AddChunksCS(const glm::ivec3& cs);
+		void AddChunksWS(const glm::vec3& ws);
+
+		std::shared_ptr<Chunk> GetChunk(glm::ivec3 cs);
 		Block* GetBlockWS(glm::ivec3 ws);
 		Block* GetBlockWS(glm::vec3 ws);
 
 		void Render(const glm::mat4& projView, DebugData& data);
+	private:
+		std::unordered_map<IVec3, std::shared_ptr<Chunk>, KeyHash> m_Chunks;
 	};
 }
